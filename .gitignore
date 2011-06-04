@@ -1,0 +1,6 @@
+*.class
+*~
+dist
+build
+nbproject
+
