@@ -1,8 +1,9 @@
 
 
-import org.voile.MemManager;
+import org.voile.MemoryPool;
 
 import java.util.*;
+import org.voile.MemoryPool.Block;
 
 /**
  *
@@ -12,29 +13,30 @@ public class MemTest {
     
     public static void main(String []args) {
 
-        HashMap<Integer,Integer> a = new HashMap<Integer,Integer>();
+        //HashMap<Integer,Integer> a = new HashMap<Integer,Integer>();
+        HashSet<Block> a = new HashSet<Block>();
 
 
-        MemManager st = new MemManager(50,100,true);
+        MemoryPool st = new MemoryPool(50,100,true);
 
         Random rand = new Random();
 
         for(int i=0;i<10000;i++) {
             if(rand.nextBoolean()) {
                 int s = 1 + rand.nextInt(600);
-                int p = st.allocate(s);
+                Block p = st.allocate(s);
                 System.out.println("got block on "+p+" size "+s);
-                Integer old = a.put(p,s);
-                if(old != null) {
+                boolean old = a.add(p);
+                if(old == false) {
                     System.out.println("leaking "+p+" size "+old);
                 }
             } else {
-                Iterator<Map.Entry<Integer,Integer>> it = a.entrySet().iterator();
+                Iterator<Block> it = a.iterator();
                 for(int j=0;j<rand.nextInt(5);j++) {
                     if(!it.hasNext())break;
-                    Map.Entry<Integer,Integer> e = it.next();
-                    st.free(e.getKey(),e.getValue());
-                    System.out.println("free "+e.getKey()+" "+e.getValue());
+                    Block e = it.next();
+                    st.free(e);
+                    System.out.println("free "+e);
                     it.remove();
                 }
             }
@@ -42,9 +44,9 @@ public class MemTest {
 
         System.out.println("\n"+st);
 
-        for(Map.Entry<Integer,Integer> e : a.entrySet()){
-            System.out.println("had "+e.getKey()+" "+e.getValue());
-             st.free(e.getKey(),e.getValue());
+        for(Block e : a){
+            System.out.println("had "+e);
+             st.free(e);
         }
 
         System.out.println("\n"+st);

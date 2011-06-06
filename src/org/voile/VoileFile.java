@@ -4,6 +4,7 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.*;
+import org.voile.MemoryPool.Block;
 
 /**
  * @author fox
@@ -18,7 +19,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
     private static final Comparator<Entry> dataPointerComparator = new Comparator<Entry>() {
         @Override
         public int compare(Entry e1, Entry e2) {
-            return e1.dataPointer - e2.dataPointer;
+            return e1.data.start - e2.data.start;
         }
     };
 
@@ -26,8 +27,8 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
     private final FileChannel chan;
 
     private final HashMap<K, Entry> index;
-    private final MemManager headerSpace;
-    private final MemManager dataSpace;
+    private final MemoryPool headerSpace;
+    private final MemoryPool dataSpace;
 
     public VoileFile(File f) throws IOException {
         boolean newFile = !f.exists();
@@ -37,8 +38,8 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
 
         if (newFile) {
             int dataStartPointer = 5 * INDEX_ENTRY_SIZE;
-            headerSpace = new MemManager(INDEX_START, dataStartPointer, false);
-            dataSpace = new MemManager(dataStartPointer, 2 * dataStartPointer, true);
+            headerSpace = new MemoryPool(INDEX_START, dataStartPointer, false);
+            dataSpace = new MemoryPool(dataStartPointer, 2 * dataStartPointer, true);
             updateMainHeader();
         }
         else {
@@ -48,8 +49,9 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
             ArrayList<Entry> entry_list = new ArrayList<Entry>(numEntries);
 
             for (int i = 0; i < numEntries; i++) {
-                Entry e = new Entry((int) file.getFilePointer(),
-                        file.readInt(), file.readInt(), file.readInt());
+                Block header = new Block((int) file.getFilePointer(), INDEX_ENTRY_SIZE);
+                Block data = new Block(file.readInt(), file.readInt());
+                Entry e = new Entry(header, data, file.readInt());
 
                 @SuppressWarnings({"unchecked"})
                 K key = (K) bin2object(readKey(e));
@@ -58,18 +60,18 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
                 entry_list.add(e);
             }
             int p = (int) file.getFilePointer();
-            headerSpace = new MemManager(p, dataStartPointer, false);
+            headerSpace = new MemoryPool(p, dataStartPointer, false);
 
             int end = (int) file.length();
-            dataSpace = new MemManager(end, end, true);
+            dataSpace = new MemoryPool(end, end, true);
 
             Collections.sort(entry_list, dataPointerComparator);
             int d_pos = dataStartPointer;
             for (Entry e : entry_list) {
-                dataSpace.free(d_pos, e.dataPointer - d_pos);
-                d_pos = e.dataPointer + e.dataSize;
+                dataSpace.free(new Block(d_pos, e.data.start - d_pos));
+                d_pos = e.data.start + e.data.length;
             }
-            dataSpace.free(d_pos, end - d_pos);
+            dataSpace.free(new Block(d_pos, end - d_pos));
         }
     }
 
@@ -99,14 +101,15 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
             old_value = (V) bin2object(readValue(e));
 
             // we got enough space to update ?
-            if (value_data.remaining() + e.keySize <= e.dataSize) {
+            if (value_data.remaining() + e.keySize <= e.data.length) {
 
-                int used = e.keySize + value_data.remaining();
-                if (used < e.dataSize) { // free unused
-                    dataSpace.free(e.dataPointer + used, e.dataSize - used);
-                    e.dataSize = used;
-                }
-                chan.write(value_data, e.dataPointer + e.keySize);
+                // split the block
+                Block nb = e.data.split(value_data.remaining() + e.keySize);
+
+                dataSpace.free(e.data); // free old
+                e.data = nb; // store new block
+                
+                chan.write(value_data, e.data.start + e.keySize);
                 writeEntry(e);
                 return old_value;
             }
@@ -150,7 +153,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         @SuppressWarnings({"unchecked"})
         V old_value = (V) bin2object(readValue(e));
 
-        dataSpace.free(e.dataPointer, e.dataSize);
+        dataSpace.free(e.data);
 
         removeEntry(e);
 
@@ -171,22 +174,22 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
 
         Entry max = e;
         for (Entry i : index.values()) {
-            if (i.headerPointer > max.headerPointer)
+            if (i.header.start > max.header.start)
                 max = i;
         }
-        int last_p = e.headerPointer;
+        Block last_p = e.header;
         if (max != e) {
-            last_p = max.headerPointer;
-            max.headerPointer = e.headerPointer;
+            last_p = max.header;
+            max.header = e.header;
             writeEntry(max);
         }
-        headerSpace.free(last_p, INDEX_ENTRY_SIZE);
+        headerSpace.free(last_p);
     }
 
     private void updateMainHeader() throws IOException {
         file.seek(0);
         file.writeInt(index.size());
-        file.writeInt(headerSpace.limit);
+        file.writeInt(headerSpace.getLimit());
     }
 
     private Entry allocate(int keySize, int valueSize) throws IOException {
@@ -194,40 +197,44 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         int size = keySize + valueSize;
 
         freeHeaderSpace();
-        int hp = headerSpace.allocate(INDEX_ENTRY_SIZE);
-        int p = dataSpace.allocate(size);
-        return new Entry(hp, p, keySize, size);
+        Block header = headerSpace.allocate(INDEX_ENTRY_SIZE);
+        Block data = dataSpace.allocate(size);
+        Entry e = new Entry(header, data, keySize);
+        //e.header = header;
+        //e.data = data;
+        return e;
     }
 
     private void freeHeaderSpace() throws IOException {
         while (!headerSpace.checkSpace(INDEX_ENTRY_SIZE)) {
-            Entry f = findBlockAt(headerSpace.limit);
+            Entry f = findBlockAt(headerSpace.getLimit());
 
             if (f == null) { // freed maybe ?
                 System.err.println(dataSpace);
                 System.err.println(headerSpace);
-                int size = dataSpace.allocateAt(headerSpace.limit);
+                Block b = dataSpace.allocateAt(headerSpace.getLimit());
 
-                if (size >= 0) {
-                    headerSpace.free(headerSpace.limit, size);
-                    System.err.println("found on data " + size);
+                if (b != null) {
+                    headerSpace.free(b); // pass the space to the header
+                    System.err.println("found on data " + b);
                     continue;
                 } else {
-                    throw new IOException("LOL " + size);
+                    throw new IOException("LOL ");
                 }
             }
 
             // find a new place to the data
-            int dp = dataSpace.allocate(f.dataSize);
+            Block data = dataSpace.allocate(f.data.length);
+            int dp = data.start;
 
             // read the data
             ByteBuffer key_data = readKey(f);
             ByteBuffer value_data = readValue(f);
 
             // tell the header the space is free
-            headerSpace.free(f.dataPointer, f.dataSize);
+            headerSpace.free(f.data);
 
-            f.dataPointer = dp; // set new pointer
+            f.data = data; // set new block
 
             // and transfer the data
             writeData(f, key_data, value_data);
@@ -238,34 +245,34 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
     private Entry findBlockAt(int targetFp) {
         System.err.println("target " + targetFp);
         for (Entry e : index.values()) {
-            System.err.println(e.dataPointer + " " + e.dataSize);
-            if (e.dataPointer == targetFp) return e;
+            System.err.println(e.data.start + " " + e.data.length);
+            if (e.data.start == targetFp) return e;
         }
         return null;
     }
 
     private void writeEntry(Entry e) throws IOException {
-        file.seek(e.headerPointer);
-        file.writeInt(e.dataPointer);
+        file.seek(e.header.start);
+        file.writeInt(e.data.start);
+        file.writeInt(e.data.length);
         file.writeInt(e.keySize);
-        file.writeInt(e.dataSize);
     }
 
     private void writeData(Entry e, ByteBuffer key, ByteBuffer value) throws IOException {
-        chan.write(key, e.dataPointer);
-        chan.write(value, e.dataPointer + e.keySize);
+        chan.write(key, e.data.start);
+        chan.write(value, e.data.start + e.keySize);
     }
 
     private ByteBuffer readKey(Entry e) throws IOException {
         ByteBuffer key_data = ByteBuffer.allocate(e.keySize);
-        chan.read(key_data, e.dataPointer);
+        chan.read(key_data, e.data.start);
         key_data.rewind();
         return key_data;
     }
 
     private ByteBuffer readValue(Entry e) throws IOException {
-        ByteBuffer value_data = ByteBuffer.allocate(e.dataSize - e.keySize);
-        chan.read(value_data, e.dataPointer + e.keySize);
+        ByteBuffer value_data = ByteBuffer.allocate(e.data.length - e.keySize);
+        chan.read(value_data, e.data.start + e.keySize);
         value_data.rewind();
         return value_data;
     }
@@ -292,16 +299,15 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
     }
 
     static class Entry {
-        int dataPointer;
         final int keySize;
-        int dataSize;
-        int headerPointer;
 
-        Entry(int hp, int dp, int ks, int ds) {
-            headerPointer = hp;
-            dataPointer = dp;
+        Block header;
+        Block data;
+
+        Entry(Block header, Block data, int ks) {
+            this.header = header;
+            this.data = data;
             keySize = ks;
-            dataSize = ds;
         }
     }
 }
