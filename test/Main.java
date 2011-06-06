@@ -1,4 +1,4 @@
-package test;
+
 
 import org.voile.VoileMap;
 

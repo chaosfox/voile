@@ -1,5 +1,4 @@
 
-package test;
 
 import org.voile.MemManager;
 
@@ -16,8 +15,8 @@ public class MemTest {
         HashMap<Integer,Integer> a = new HashMap<Integer,Integer>();
 
 
-        MemManager st = new MemManager(0,10,true);
-//
+        MemManager st = new MemManager(50,100,true);
+
         Random rand = new Random();
 
         for(int i=0;i<10000;i++) {

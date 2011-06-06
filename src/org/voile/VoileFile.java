@@ -206,7 +206,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
             if (f == null) { // freed maybe ?
                 System.err.println(dataSpace);
                 System.err.println(headerSpace);
-                int size = dataSpace.findBlockAt(headerSpace.limit);
+                int size = dataSpace.allocateAt(headerSpace.limit);
 
                 if (size >= 0) {
                     headerSpace.free(headerSpace.limit, size);

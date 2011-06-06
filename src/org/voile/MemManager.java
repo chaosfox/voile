@@ -2,7 +2,11 @@ package org.voile;
 
 
 import java.util.TreeSet;
-
+/**
+ * manages a chunk of data, provides methods 
+ * to allocate and free blocks of the chunk
+ * @author fox
+ */
 public class MemManager {
 
     private final TreeSet<Block> freeSpace;
@@ -10,15 +14,24 @@ public class MemManager {
     int limit;
     private final boolean growable; // grow when allocate
 
-    public MemManager(int used, int length, boolean growable) {
+    /** creates a new chunk of data
+     * @param offset where to start the count
+     * @param length the size of the chunk
+     * @param growable whether the chunk can grow if there's not enough 
+     */
+    public MemManager(int offset, int length, boolean growable) {
         this.limit = length;
         this.growable = growable;
 
         freeSpace = new TreeSet<Block>();
-        free(0, limit);
-        allocate(used);
+        free(offset, limit-offset);
     }
 
+    /**
+     * allocates a block from the chunk
+     * @param size the size of the desired block
+     * @return a pointer for the block
+     */
     public int allocate(int size) {
         if (size <= 0) return -1;
 
@@ -28,13 +41,18 @@ public class MemManager {
             if (!growable) return -1;
 
             // create more space
-            free(limit, 2 * size);
+            free(limit, size);
             b = findFreeBlock(size);
         }
 
         return checkout(b, size);
     }
 
+    /** 
+     * checks if this chunk have a block with enough space
+     * @param size the desired block size
+     * @return whether it have the block
+     */
     public boolean checkSpace(int size) {
         if (growable) return true;
 
@@ -42,6 +60,13 @@ public class MemManager {
         return b != null;
     }
 
+    /** 
+     * removes the block from this chunk,
+     * possibly split it if it's bigger than desired
+     * @param b the block to remove
+     * @param size how much space I actually want
+     * @return a pointer for the space
+     */
     private int checkout(Block b, int size) {
         int extra = b.length - size;
         int p = b.start;
@@ -54,6 +79,11 @@ public class MemManager {
         return p;
     }
 
+    /** 
+     * search for the smallest block with size space
+     * @param size the space desired
+     * @return the block or null if not found
+     */
     private Block findFreeBlock(int size) {
 
         // iterate in order min~max
@@ -65,7 +95,11 @@ public class MemManager {
         return null;
     }
 
-    public int findBlockAt(long p) {
+    /** allocate a space at the desired pointer
+     * @param p the position desired to start
+     * @return the size of the block or -1 if there's no block at p
+     */
+    public int allocateAt(long p) {
         for (Block b : freeSpace) {
             if (b.start == p) {
                 checkout(b, b.length);
@@ -75,6 +109,11 @@ public class MemManager {
         return -1;
     }
 
+    /**
+     * free a block back to the chunk
+     * @param p the pointer for the block
+     * @param size the size of the block
+     */
     public void free(int p, int size) {
 
         if (size <= 0) return;
