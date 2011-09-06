@@ -19,7 +19,7 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
         try {
             vf = new VoileFile<K,V>(file);
         } catch (IOException ex) {
-            ex.printStackTrace();
+            throw new RuntimeException(ex);
         }
     }
 
@@ -40,7 +40,7 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
 
     @Override
     public boolean containsValue(Object o) {
-        throw new UnsupportedOperationException("Not supported. ever.");
+        throw new UnsupportedOperationException("Not supported. Ever.");
     }
 
     @Override
@@ -48,9 +48,8 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
         try {
             return vf.get((K)o);
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         }
-        return null;
     }
 
     @Override
@@ -58,9 +57,8 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
         try {
             return vf.put(k,v);
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         }
-        return null;
     }
 
     @Override
@@ -68,9 +66,8 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
         try {
             return vf.remove((K) o);
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         }
-        return null;
     }
 
     @Override
@@ -87,7 +84,7 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
             file.createNewFile();
             vf = new VoileFile<K,V>(file);
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
         }
     }
 
@@ -98,12 +95,12 @@ public class VoileMap <K extends Serializable, V extends Serializable> implement
 
     @Override
     public Collection<V> values() {
-        throw new UnsupportedOperationException("Not supported. ever.");
+        throw new UnsupportedOperationException("Not supported. Ever.");
     }
 
     @Override
     public Set<Entry<K, V>> entrySet() {
-        throw new UnsupportedOperationException("Not supported. ever.");
+        throw new UnsupportedOperationException("Not supported. Ever.");
     }
 
     public void close() throws IOException {

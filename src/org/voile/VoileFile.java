@@ -1,9 +1,22 @@
 package org.voile;
 
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.RandomAccessFile;
+import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 import org.voile.MemoryPool.Block;
 
 /**
@@ -12,9 +25,9 @@ import org.voile.MemoryPool.Block;
 public class VoileFile<K extends Serializable, V extends Serializable> {
 
     private static final int INT_SIZE = Integer.SIZE / Byte.SIZE;
-    private static final int INDEX_ENTRY_SIZE = INT_SIZE + INT_SIZE + INT_SIZE;
+    private static final int INDEX_ENTRY_SIZE = 3 * INT_SIZE;
 
-    private static final int INDEX_START = INT_SIZE + INT_SIZE;
+    private static final int INDEX_START = 2 * INT_SIZE;
 
     private static final Comparator<Entry> dataPointerComparator = new Comparator<Entry>() {
         @Override
@@ -43,11 +56,13 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
             updateMainHeader();
         }
         else {
+            // read existing file
             final int numEntries = file.readInt();
             final int dataStartPointer = file.readInt();
 
             ArrayList<Entry> entry_list = new ArrayList<Entry>(numEntries);
 
+            // read index, numEntries x (dataPointer, dataLength, keySize) 
             for (int i = 0; i < numEntries; i++) {
                 Block header = new Block((int) file.getFilePointer(), INDEX_ENTRY_SIZE);
                 Block data = new Block(file.readInt(), file.readInt());
@@ -65,6 +80,8 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
             int end = (int) file.length();
             dataSpace = new MemoryPool(end, end, true);
 
+            // re-construct the free space pool based on the
+            // holes missing between the index entries
             Collections.sort(entry_list, dataPointerComparator);
             int d_pos = dataStartPointer;
             for (Entry e : entry_list) {
@@ -92,30 +109,34 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         Entry e = index.get(key);
         ByteBuffer key_data = object2bin(key);
         ByteBuffer value_data = object2bin(value);
-        System.err.println("put key[" + key + "] [" + value + "]");
+
+        Logger.getLogger(this.getClass().getName()).log(Level.INFO, "put key[{0}] [{1}]", new Object[]{key, value});
+
         V old_value = null;
 
-        if (e != null) { // update
+        // if there's already a entry at this key
+        if (e != null) {
 
-            //noinspection unchecked
-            old_value = (V) bin2object(readValue(e));
-
-            // we got enough space to update ?
+            // if we got enough space, update
             if (value_data.remaining() + e.keySize <= e.data.length) {
 
-                // split the block
-                Block nb = e.data.split(value_data.remaining() + e.keySize);
+                //noinspection unchecked
+                old_value = (V) bin2object(readValue(e)); // get old value first
 
-                dataSpace.free(e.data); // free old
-                e.data = nb; // store new block
-                
+                // split the data block
+                Block[] split_block = Block.splitBlock(e.data, value_data.remaining() + e.keySize);
+
+                dataSpace.free(split_block[1]); // free extra space
+                e.data = split_block[0]; // store new block
+
+                // write new data
                 chan.write(value_data, e.data.start + e.keySize);
                 writeEntry(e);
+
                 return old_value;
             }
-            // else, need remove-insert again
-            System.err.print("put--");
-            remove(key);
+            // else, we need to remove and then insert again
+            old_value = remove(key);
         }
         // insert new
 
@@ -148,7 +169,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         final Entry e = index.get(key);
         if (e == null) return null;
 
-        System.err.println("remove [" + key + "]");
+        Logger.getLogger(this.getClass().getName()).log(Level.INFO, "remove [{0}]", key);
 
         @SuppressWarnings({"unchecked"})
         V old_value = (V) bin2object(readValue(e));
@@ -186,6 +207,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         headerSpace.free(last_p);
     }
 
+
     private void updateMainHeader() throws IOException {
         file.seek(0);
         file.writeInt(index.size());
@@ -199,10 +221,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         freeHeaderSpace();
         Block header = headerSpace.allocate(INDEX_ENTRY_SIZE);
         Block data = dataSpace.allocate(size);
-        Entry e = new Entry(header, data, keySize);
-        //e.header = header;
-        //e.data = data;
-        return e;
+        return new Entry(header, data, keySize);
     }
 
     private void freeHeaderSpace() throws IOException {
@@ -210,22 +229,18 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
             Entry f = findBlockAt(headerSpace.getLimit());
 
             if (f == null) { // freed maybe ?
-                System.err.println(dataSpace);
-                System.err.println(headerSpace);
                 Block b = dataSpace.allocateAt(headerSpace.getLimit());
 
                 if (b != null) {
                     headerSpace.free(b); // pass the space to the header
-                    System.err.println("found on data " + b);
                     continue;
                 } else {
-                    throw new IOException("LOL ");
+                    throw new IOException("Corrupted: Couldn't get extra space for the header.");
                 }
             }
 
             // find a new place to the data
             Block data = dataSpace.allocate(f.data.length);
-            int dp = data.start;
 
             // read the data
             ByteBuffer key_data = readKey(f);
@@ -243,9 +258,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
     }
 
     private Entry findBlockAt(int targetFp) {
-        System.err.println("target " + targetFp);
         for (Entry e : index.values()) {
-            System.err.println(e.data.start + " " + e.data.length);
             if (e.data.start == targetFp) return e;
         }
         return null;
@@ -277,12 +290,12 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         return value_data;
     }
 
-    private ByteBuffer object2bin(Serializable o) {
+    private ByteBuffer object2bin(Serializable o) throws IOException {
         ByteArrayOutputStream bao = new ByteArrayOutputStream();
         try {
             new ObjectOutputStream(bao).writeObject(o);
-        } catch (IOException ignored) {
-            return null;
+        } catch (IOException ex) {
+            throw ex;
         }
         return ByteBuffer.wrap(bao.toByteArray());
     }
@@ -292,10 +305,9 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
 
         try {
             return (Serializable) new ObjectInputStream(new ByteBufferInputStream(blob)).readObject();
-        } catch (ClassNotFoundException ignored) {
-            ignored.printStackTrace(); //TODO: is this a problem ?
+        } catch (ClassNotFoundException cnfe) {
+            throw new RuntimeException(cnfe);
         }
-        return null;
     }
 
     static class Entry {

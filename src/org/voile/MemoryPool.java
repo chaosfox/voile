@@ -12,16 +12,16 @@ public class MemoryPool {
     private final TreeSet<Block> freeSpace;
 
     private int limit;
-    private final boolean growable;
+    private final boolean canGrow;
 
     /** creates a new pool of space
      * @param offset where to start the count
      * @param length the size of the pool
-     * @param growable grow as needed when allocate
+     * @param canGrow grow as needed when allocate
      */
-    public MemoryPool(int offset, int length, boolean growable) {
+    public MemoryPool(int offset, int length, boolean canGrow) {
         this.limit = length;
-        this.growable = growable;
+        this.canGrow = canGrow;
 
         freeSpace = new TreeSet<Block>();
         free(new Block(offset, limit-offset));
@@ -38,7 +38,7 @@ public class MemoryPool {
         Block b = findFreeBlock(size);
 
         if (b == null) {
-            if (!growable) return null;
+            if (!canGrow) return null;
 
             // create more space
             free(new Block(limit, size));
@@ -54,7 +54,7 @@ public class MemoryPool {
      * @return whether it have the block
      */
     public boolean checkSpace(int size) {
-        if (growable) return true;
+        if (canGrow) return true;
 
         Block b = findFreeBlock(size);
         return b != null;
@@ -69,9 +69,13 @@ public class MemoryPool {
      */
     private Block checkout(Block b, int size) {
         freeSpace.remove(b);
-        Block nb = b.split(size);
-        if(b.length>0)freeSpace.add(b);
-        return nb;
+
+        // split b size bytes
+        Block [] ab = Block.splitBlock(b, size);
+        
+        // if there is extra space, add it back
+        if(ab[1].length>0)freeSpace.add(ab[1]);
+        return ab[0];
     }
 
     /** 
@@ -81,7 +85,7 @@ public class MemoryPool {
      */
     private Block findFreeBlock(int size) {
 
-        // iterate in order min~max
+        // iteration is ordered min ~ max
         for (Block b : freeSpace) {
             if (b.length >= size) 
                 return b;
@@ -117,37 +121,41 @@ public class MemoryPool {
 
         if (b.start + b.length > limit) limit = b.start + b.length; // grows with free
 
+        // query adjacent blocks
         Block prev = freeSpace.floor(b);
         Block next = freeSpace.higher(b);
 
         if (prev != null && prev.start + prev.length > b.start) {
-            new RuntimeException("DEBUG PRV " + prev.start + "+" + prev.length + ">" + b.start).printStackTrace();
-            System.exit(1);
+            throw new RuntimeException("Corrupted. DEBUG PRV " + prev.start + "+" + prev.length + ">" + b.start);
         }
         if (next != null && next.start < b.start + b.length) {
-            new RuntimeException("DEBUG NEX " + next.start + "<" + b.start + "+" + b.length).printStackTrace();
-            System.exit(1);
+            throw new RuntimeException("Corrupted. DEBUG NEX " + next.start + "<" + b.start + "+" + b.length);
         }
 
-        if(b.merge(prev))freeSpace.remove(prev);
-        if(b.merge(next))freeSpace.remove(next);
+        // merge them if possible
+        
+        Block n = Block.mergeBlocks(b, prev);
+        if(n != null) { freeSpace.remove(prev); b = n; }
+
+        n = Block.mergeBlocks(b, next);
+        if(n != null) { freeSpace.remove(next); b = n; }
 
         freeSpace.add(b);
     }
 
     @Override
     public String toString() {
-        String s = "";
+        StringBuilder sb = new StringBuilder();
         for (Block b : freeSpace) {
-            s += "BLOCK [" + b.start + "] ~ " + b.length + "\n";
+            sb.append(b).append("\n");
         }
-        return s;
+        return sb.toString();
     }
 
     public static class Block implements Comparable<Block> {
 
-        int start;
-        int length;
+        final int start;
+        final int length;
 
         public Block(int start, int length) {
             this.start = start;
@@ -173,26 +181,46 @@ public class MemoryPool {
             hash = 53 * hash + this.length;
             return hash;
         }
-        public boolean merge(Block b) {
-            if(b == null)return false;
-            // left merge
-            if(b.start + b.length == this.start) {
-                this.start = b.start;
-                this.length += b.length;
-                return true;
-            }
-            // right merge
-            if (b.start == this.start + this.length) {
-                this.length += b.length;
-                return true;
-            }
-            return false;
+
+        @Override
+        public String toString() {
+            return "BLOCK["+start+":"+length+"]";
         }
-        public Block split(int size) {
-            Block b = new Block(this.start, size);
-            this.start += size;
-            this.length -= size;
-            return b;
+
+        /**
+         * merge 2 blocks into one IF their positions
+         * are adjacent to each other, otherwise NULL
+         * @param a block to merge
+         * @param b another block to merge
+         * @return merged block or NULL if merge is not possible
+         */
+        public static Block mergeBlocks(Block a, Block b) {
+            if(a == null || b == null)return null;
+
+            // left merge
+            if(b.start + b.length == a.start) {
+                return new Block(b.start, a.length + b.length);
+            }
+
+            // right merge
+            if (b.start == a.start + a.length) {
+                return new Block(a.start, a.length + b.length);
+            }
+            return null;
+        }
+
+        /**
+         * split a block into
+         *   a block with size bytes from the start of the original
+         *   a block with the extra bytes from the original
+         * @param b the original block
+         * @param size to split the first block
+         * @return an array with the 2 new blocks
+         */
+        public static Block[] splitBlock(Block b, int size) {
+            Block nb = new Block(b.start, size);
+            b = new Block(b.start + size, b.length - size);
+            return new Block[]{nb, b};
         }
     }
 }

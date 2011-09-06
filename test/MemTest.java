@@ -27,7 +27,7 @@ public class MemTest {
                 Block p = st.allocate(s);
                 System.out.println("got block on "+p+" size "+s);
                 boolean old = a.add(p);
-                if(old == false) {
+                if(!old) {
                     System.out.println("leaking "+p+" size "+old);
                 }
             } else {
