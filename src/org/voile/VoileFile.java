@@ -110,7 +110,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         ByteBuffer key_data = object2bin(key);
         ByteBuffer value_data = object2bin(value);
 
-        Logger.getLogger(this.getClass().getName()).log(Level.INFO, "put key[{0}] [{1}]", new Object[]{key, value});
+        //Logger.getLogger(this.getClass().getName()).log(Level.INFO, "put key[{0}] [{1}]", new Object[]{key, value});
 
         V old_value = null;
 
@@ -169,7 +169,7 @@ public class VoileFile<K extends Serializable, V extends Serializable> {
         final Entry e = index.get(key);
         if (e == null) return null;
 
-        Logger.getLogger(this.getClass().getName()).log(Level.INFO, "remove [{0}]", key);
+        //Logger.getLogger(this.getClass().getName()).log(Level.INFO, "remove [{0}]", key);
 
         @SuppressWarnings({"unchecked"})
         V old_value = (V) bin2object(readValue(e));
